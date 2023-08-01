@@ -1,0 +1,5 @@
+# Haskell Tool Stack-related
+.stack-work/
+
+# Possible output of the test suite
+output/

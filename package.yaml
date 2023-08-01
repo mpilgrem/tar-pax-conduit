@@ -1,0 +1,45 @@
+name:                tar-pax-conduit
+version:             0.1.0.0
+github:              "mpilgrem/tar-pax-conduit"
+license:             BSD3
+author:              "Mike Pilgrem"
+maintainer:          "public@pilgrem.com"
+copyright:           "Copyright 2022 Mike Pilgrem"
+
+extra-source-files:
+- README.md
+- CHANGELOG.md
+
+description:         Please see the README on GitHub at <https://github.com/mpilgrem/tar-pax-conduit#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- attoparsec
+- conduit
+- rio
+- tar-conduit
+
+ghc-options:
+- -Wall
+- -Wcompat
+- -Widentities
+- -Wincomplete-record-updates
+- -Wincomplete-uni-patterns
+- -Wmissing-export-lists
+- -Wmissing-home-modules
+- -Wpartial-fields
+- -Wredundant-constraints
+
+library:
+  source-dirs: src
+
+tests:
+  tar-pax-conduit-test:
+    main:                Main.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - tar-pax-conduit
