@@ -59,7 +59,6 @@ applyPaxChunkHeaders = awaitForever $ \i -> do
   let updateState f = do
         p <- parsePax
         lift $ put $ f p state
-        pure ()
   case i of
     ChunkHeader h -> case headerLinkIndicator h of
       -- 'g'
@@ -117,17 +116,12 @@ paxParser b = paxParser' [] b
 recordParser :: ByteString -> Maybe ((ByteString, ByteString), ByteString)
 recordParser b0 = do
   let (nb, b1) = BS.span isDecimal b0
-  n <- if nb == mempty
-    then Nothing
-    else Just $ parseDecimal nb
-  (sb, b2) <- uncons b1
-  _ <- skip isSpace sb
+  n <- toMaybe (not $ BS.null nb) (parseDecimal nb)
+  b2 <- skip isSpace b1
   let (k, b3) = BS.span (not . isEquals) b2
-  (eb, b4) <- uncons b3
-  _ <- skip isEquals eb
+  b4 <- skip isEquals b3
   let (v, b5) = BS.splitAt (n - BS.length nb - BS.length k - 3) b4
-  (fb, b6) <- uncons b5
-  _ <- skip isNewline fb
+  b6 <- skip isNewline b5
   Just ((k, v), b6)
  where
   newline = 0x0a -- UTF-8 '\n'
@@ -136,9 +130,14 @@ recordParser b0 = do
   nine = 0x39 -- UTF-8 '9'
   equals = 0x3d -- UTF-8 '='
   isDecimal w = w >= zero && w <= nine
+  toMaybe :: Bool -> a -> Maybe a
+  toMaybe False _ = Nothing
+  toMaybe True x = Just x
   parseDecimal :: Integral i => ByteString -> i
   parseDecimal = BS.foldl' (\t c -> t * 10 + fromIntegral (c - zero)) 0
-  skip p w = if p w then Just () else Nothing
+  skip p b = do
+    (w, b') <- uncons b
+    if p w then Just b' else Nothing
   isSpace = (space ==)
   isEquals = (equals ==)
   isNewline = (newline ==)
