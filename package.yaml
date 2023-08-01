@@ -14,9 +14,11 @@ description:         Please see the README on GitHub at <https://github.com/mpil
 
 dependencies:
 - base >= 4.7 && < 5
-- attoparsec
+- bytestring
 - conduit
-- rio
+- containers
+- directory
+- mtl
 - tar-conduit
 
 ghc-options:

@@ -1,4 +1,3 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -15,19 +14,19 @@ module Data.Conduit.Tar.Pax
   , applyPaxChunkHeaders
   ) where
 
-import           Data.Attoparsec.ByteString as AP
-                   ( Parser, many1, match, parseOnly, skip, take, takeTill )
-import           Data.Attoparsec.ByteString.Char8 ( decimal )
+import           Conduit ( MonadThrow )
+import           Control.Monad.State.Lazy ( StateT, get, lift, put)
+import           Data.ByteString ( ByteString, uncons )
+import qualified Data.ByteString as BS
+import           Data.ByteString.Short ( toShort )
 import           Data.Conduit ( ConduitT, (.|), await, awaitForever, yield )
 import           Data.Conduit.Lift ( evalStateLC )
 import           Data.Conduit.Tar
                    ( FileInfo, Header (..), TarChunk (..), untarChunks
                    , withFileInfo
                    )
-import           RIO
-import qualified RIO.ByteString as BS
-import qualified RIO.Map as Map
-import           RIO.State ( StateT, get, put )
+import           Data.Map ( Map )
+import qualified Data.Map as Map
 
 -- | Type synonym representing a pax extended header.
 type Pax = Map ByteString ByteString
@@ -93,23 +92,53 @@ applyPax p h = updateLinkpath $ updatePath h
 
 parsePax :: Monad m => ConduitT TarChunk TarChunk (StateT PaxState m) Pax
 parsePax = await >>= \case
-  Just (ChunkPayload _ b) ->
-    pure $ either (const mempty) id (parseOnly paxParser b)
+  Just (ChunkPayload _ b) -> pure $ paxParser b
   _ -> pure mempty
 
--- | A pax extended header comprises one or more records.
-paxParser :: Parser Pax
-paxParser = Map.fromList <$> AP.many1 recordParser
+-- | A pax extended header comprises one or more records. If the pax extended
+-- header is empty or does not parse, yields an empty 'Pax'.
+paxParser :: ByteString -> Pax
+paxParser b
+  -- This is an error case.
+  | BS.null b = mempty
+paxParser b = paxParser' [] b
+ where
+  paxParser' :: [(ByteString, ByteString)] -> ByteString -> Pax
+  paxParser' l b0
+    | BS.null b0 = Map.fromList l
+  paxParser' l b0 =
+    maybe mempty (\(pair, b1) -> paxParser' (pair:l) b1) (recordParser b0)
 
 -- | A record in a pax extended header has format:
 --
 -- "%d %s=%s\n", <length>, <keyword>, <value>
-recordParser :: Parser (ByteString, ByteString)
-recordParser = do
-  (nb, n) <- match decimal
-  skip (== 0x20) -- UTF-8 ' '
-  (kb, k) <- match $ takeTill (== 0x3d) -- UTF-8 '='
-  skip (== 0x3d) -- UTF-8 '='
-  v <- AP.take (n - BS.length nb - BS.length kb - 3)
-  skip (== 0x0A) -- UTF-8 '\n'
-  pure (k, v)
+--
+-- If the record does not parse @(<keyword>, <value>)@, yields 'Nothing'.
+recordParser :: ByteString -> Maybe ((ByteString, ByteString), ByteString)
+recordParser b0 = do
+  let (nb, b1) = BS.span isDecimal b0
+  n <- if nb == mempty
+    then Nothing
+    else Just $ parseDecimal nb
+  (sb, b2) <- uncons b1
+  _ <- skip isSpace sb
+  let (k, b3) = BS.span (not . isEquals) b2
+  (eb, b4) <- uncons b3
+  _ <- skip isEquals eb
+  let (v, b5) = BS.splitAt (n - BS.length nb - BS.length k - 3) b4
+  (fb, b6) <- uncons b5
+  _ <- skip isNewline fb
+  Just ((k, v), b6)
+ where
+  newline = 0x0a -- UTF-8 '\n'
+  space = 0x20 -- UTF-8 ' '
+  zero = 0x30 --  UTF-8 '0'
+  nine = 0x39 -- UTF-8 '9'
+  equals = 0x3d -- UTF-8 '='
+  isDecimal w = w >= zero && w <= nine
+  parseDecimal :: Integral i => ByteString -> i
+  parseDecimal = BS.foldl' (\t c -> t * 10 + fromIntegral (c - zero)) 0
+  skip p w = if p w then Just () else Nothing
+  isSpace = (space ==)
+  isEquals = (equals ==)
+  isNewline = (newline ==)
