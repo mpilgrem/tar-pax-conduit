@@ -27,6 +27,7 @@ import           Data.Conduit.Tar
                    )
 import           Data.Map ( Map )
 import qualified Data.Map as Map
+import           Data.Word ( Word8 )
 
 -- | Type synonym representing a pax extended header.
 type Pax = Map ByteString ByteString
@@ -49,8 +50,8 @@ initialPaxState :: PaxState
 initialPaxState = PaxState mempty mempty
 
 -- | Applies tar chunks that are pax extended headers to the tar chunks that
--- follow. However, only the 'comment', 'linkpath' and 'path' keywords are
--- supported.
+-- follow. However, only the 'comment', 'gid', 'gname', 'linkpath', 'path',
+-- 'size', 'uid', 'uname' keywords are supported.
 applyPaxChunkHeaders ::
      Monad m
   => ConduitT TarChunk TarChunk (StateT PaxState m) ()
@@ -74,20 +75,39 @@ applyPaxChunkHeaders = awaitForever $ \i -> do
   updateNext p (PaxState g _) = PaxState g p
   clearNext = updateNext mempty
 
--- | Only the 'comment', 'linkpath' and 'path' keywords are supported.
+-- | Only the 'comment', 'gid', 'gname', 'linkpath','path', 'size', 'uid' and
+-- 'uname' keywords are supported.
 applyPax :: Pax -> Header -> Header
-applyPax p h = updateLinkpath $ updatePath h
+applyPax p h =
+    updateGid
+  $ updateGname
+  $ updateLinkpath
+  $ updatePath
+  $ updateSize
+  $ updateUid
+  $ updateUname h
  where
-  -- The 'comment' keyword is ignored.
-  updateLinkpath = case p Map.!? "linkpath" of
-    Nothing -> id
-    Just fp -> \h' -> h' { headerLinkName = toShort fp }
-  updatePath = case p Map.!? "path" of
-    Nothing -> id
-    Just fp -> \h' -> h'
-      { headerFileNameSuffix = toShort fp
-      , headerFileNamePrefix = mempty
-      }
+  update :: ByteString -> (ByteString -> Header -> Header) -> (Header -> Header)
+  update k f = maybe id f (p Map.!? k)
+  ifValueDecimal ::
+       Integral i
+    => (i -> Header -> Header)
+    -> ByteString
+    -> (Header -> Header)
+  ifValueDecimal f v = if isDecimals v
+    then f (parseDecimal v)
+    else id
+  -- There is no 'updateComment' because comments are ignored.
+  updateGid = update "gid" $ ifValueDecimal $ \v h' -> h' { headerGroupId = v }
+  updateGname = update "gname" $ \v h' -> h' { headerGroupName = toShort v }
+  updateLinkpath =
+    update "linkpath" $ \v h' -> h' { headerLinkName = toShort v }
+  updatePath = update "path" $ \v h' -> h'
+    { headerFileNameSuffix = toShort v, headerFileNamePrefix = mempty }
+  updateSize = update "size" $ ifValueDecimal $ \v h' -> h'
+    { headerPayloadSize = v }
+  updateUid = update "uid" $ ifValueDecimal $ \v h' -> h' { headerOwnerId = v }
+  updateUname = update "uname" $ \v h' -> h' { headerOwnerName = toShort v }
 
 parsePax :: Monad m => ConduitT TarChunk TarChunk (StateT PaxState m) Pax
 parsePax = await >>= \case
@@ -126,18 +146,28 @@ recordParser b0 = do
  where
   newline = 0x0a -- UTF-8 '\n'
   space = 0x20 -- UTF-8 ' '
-  zero = 0x30 --  UTF-8 '0'
-  nine = 0x39 -- UTF-8 '9'
   equals = 0x3d -- UTF-8 '='
-  isDecimal w = w >= zero && w <= nine
   toMaybe :: Bool -> a -> Maybe a
   toMaybe False _ = Nothing
   toMaybe True x = Just x
-  parseDecimal :: Integral i => ByteString -> i
-  parseDecimal = BS.foldl' (\t c -> t * 10 + fromIntegral (c - zero)) 0
   skip p b = do
     (w, b') <- uncons b
     if p w then Just b' else Nothing
   isSpace = (space ==)
   isEquals = (equals ==)
   isNewline = (newline ==)
+
+parseDecimal :: Integral i => ByteString -> i
+parseDecimal = BS.foldl' (\t c -> t * 10 + fromIntegral (c - zero)) 0
+
+zero :: Word8
+zero = 0x30 --  UTF-8 '0'
+
+nine :: Word8
+nine = 0x39 -- UTF-8 '9'
+
+isDecimal :: Word8 -> Bool
+isDecimal w = w >= zero && w <= nine
+
+isDecimals :: ByteString -> Bool
+isDecimals = BS.all isDecimal
